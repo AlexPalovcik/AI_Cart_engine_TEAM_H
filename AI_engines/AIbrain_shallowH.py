@@ -6,15 +6,17 @@ import string
 
 # počet vstupů – ideálně = len(RAYCAST_ANGLES)
 N_INPUTS = 9
-N_ACTIONS = 4  # [up, down, left, right]
-N_HIDDEN = 16  # Počet neuronů ve skryté vrstvě - zvoleno 16 pro dostatečnou komplexitu
+N_ACTIONS = 4  # [up, down, left, right] - MUSÍ ZŮSTAT 4 kvůli kompatibilitě
+N_HIDDEN_1 = 32 # První skrytá vrstva
+N_HIDDEN_2 = 16 # Druhá skrytá vrstva
+
 
 # vždy pojmenováváme jako "AIbrain_jemnoteamu"
 class AIbrain_shallowH:
     def __init__(self):
         super().__init__()
         self.score = 0
-        self.chars = string.ascii_letters + string.digits  # pro potreby náhdných znaků
+        self.chars = string.ascii_letters + string.digits
         self.decider = 0
         self.x = 0
         self.y = 0
@@ -24,77 +26,78 @@ class AIbrain_shallowH:
 
     def init_param(self):
         """
-        Inicializace vah a biasů pro 2 vrstvou síť (shallow NN).
-        Používá se normální rozdělení pro inicializaci.
+        Inicializace vah a biasů pro 3 vrstvou síť (2 skryté vrstvy, Deep NN).
+        Biasy se inicializují malými náhodnými hodnotami (prolomení symetrie).
         """
         rng = np_random.default_rng()
-        weight_scale = 1.0 / np.sqrt(N_INPUTS) # Scaling podle Kaiming/He pro ReLU
+        
+        # --- 1. vrstva (Vstup -> Skrytá 1) ---
+        weight_scale_1 = 1.0 / np.sqrt(N_INPUTS)
+        self.W1 = rng.normal(loc=0.0, scale=weight_scale_1,
+                             size=(N_HIDDEN_1, N_INPUTS))
+        # Inicializujeme biasy malými náhodnými hodnotami
+        self.b1 = rng.normal(loc=0.0, scale=0.01, size=(N_HIDDEN_1,)) 
 
-        # --- 1. vrstva (Vstup -> Skrytá) ---
-        # Váhy W1: (N_HIDDEN, N_INPUTS)
-        self.W1 = rng.normal(loc=0.0, scale=weight_scale,
-                             size=(N_HIDDEN, N_INPUTS))
-        # Biasy b1: (N_HIDDEN,)
-        self.b1 = np.zeros(N_HIDDEN)
-
-        # --- 2. vrstva (Skrytá -> Výstup) ---
-        # Váhy W2: (N_ACTIONS, N_HIDDEN)
-        weight_scale_2 = 1.0 / np.sqrt(N_HIDDEN)
+        # --- 2. vrstva (Skrytá 1 -> Skrytá 2) ---
+        weight_scale_2 = 1.0 / np.sqrt(N_HIDDEN_1)
         self.W2 = rng.normal(loc=0.0, scale=weight_scale_2,
-                             size=(N_ACTIONS, N_HIDDEN))
-        # Biasy b2: (N_ACTIONS,)
-        self.b2 = np.zeros(N_ACTIONS)
+                             size=(N_HIDDEN_2, N_HIDDEN_1))
+        # Inicializujeme biasy malými náhodnými hodnotami
+        self.b2 = rng.normal(loc=0.0, scale=0.01, size=(N_HIDDEN_2,))
+        
+        # --- 3. vrstva (Skrytá 2 -> Výstup 4 akce) ---
+        weight_scale_3 = 1.0 / np.sqrt(N_HIDDEN_2)
+        self.W3 = rng.normal(loc=0.0, scale=weight_scale_3,
+                             size=(N_ACTIONS, N_HIDDEN_2))
+        # Inicializujeme biasy malými náhodnými hodnotami
+        self.b3 = rng.normal(loc=0.0, scale=0.01, size=(N_ACTIONS,))
 
 
-        self.NAME = "teamH_shallow_nn"
-
-        # vždy uložit!
+        self.NAME = "teamH_deep_4action"
         self.store()
 
     @staticmethod
     def _relu(z):
-        """
-        Aktivační funkce ReLU (Rectified Linear Unit).
-        """
+        """ Aktivační funkce ReLU. """
         return np.maximum(z, 0.0)
 
     def decide(self, data):
         """
-        Propagace vpřed (forward pass) přes 2-vrstvou neuronovou síť.
-        Z: W2 @ ReLU(W1 @ x + b1) + b2
+        Propagace vpřed. Vrací 4 surové hodnoty pro 4 akce, 
+        kompatibilní s původním systémem.
         """
         self.decider += 1
 
-        # Vstupní data
         x = np.asarray(data, dtype=float).ravel()
         
-        # Ošetření velikosti vstupu (stejné jako u původního kódu)
+        # Ošetření velikosti vstupu
         n_w = N_INPUTS
         if x.size < n_w:
             x = np.concatenate([x, np.zeros(n_w - x.size)])
         elif x.size > n_w:
             x = x[:n_w]
-
-        # Vstupní vrstva (x) je (N_INPUTS,)
         
-        # 1. vrstva: Vstup -> Skrytá
-        # Lineární kombinace: W1 @ x + b1
+        # ------------------------------------
+        # 1. vrstva: Vstup -> Skrytá 1 (ReLU)
         z1 = self.W1.dot(x) + self.b1
-        # Aktivace: ReLU
-        h1 = self._relu(z1)  # h1 má shape (N_HIDDEN,)
+        h1 = self._relu(z1)
 
-        # 2. vrstva: Skrytá -> Výstup
-        # Lineární kombinace: W2 @ h1 + b2
-        z2 = self.W2.dot(h1) + self.b2  # z2 má shape (N_ACTIONS,)
+        # 2. vrstva: Skrytá 1 -> Skrytá 2 (ReLU)
+        z2 = self.W2.dot(h1) + self.b2
+        h2 = self._relu(z2)
 
-        # Vracíme raw výstupy; AI_car pak aplikuje threshold > 0.5
-        return z2
+        # 3. vrstva: Skrytá 2 -> Výstup (Lineární aktivace)
+        z3 = self.W3.dot(h2) + self.b3  # z3 má shape (N_ACTIONS=4,)
+        # ------------------------------------
+
+        # Vracíme 4 raw výstupy; AI_car aplikuje threshold > 0.5
+        return z3
 
     def mutate(self):
         """
-        Mutace: všechny váhy a biasy (W1, b1, W2, b2) se malé náhodně posunou.
+        Mutace se zvýšenou silou.
         """
-        mutation_rate = 0.25 # Rozmezí perturbace [-0.125, 0.125]
+        mutation_rate = 0.3 # Zvýšená síla mutace pro rychlejší únik z lokálních minim
 
         # --- Mutace pro W1 a b1 ---
         delta_W1 = (np_random.rand(*self.W1.shape) - 0.5) * mutation_rate
@@ -107,6 +110,12 @@ class AIbrain_shallowH:
         delta_b2 = (np_random.rand(*self.b2.shape) - 0.5) * mutation_rate
         self.W2 = self.W2 + delta_W2
         self.b2 = self.b2 + delta_b2
+        
+        # --- Mutace pro W3 a b3 ---
+        delta_W3 = (np_random.rand(*self.W3.shape) - 0.5) * mutation_rate
+        delta_b3 = (np_random.rand(*self.b3.shape) - 0.5) * mutation_rate
+        self.W3 = self.W3 + delta_W3
+        self.b3 = self.b3 + delta_b3
 
 
         self.NAME += "_MUT_" + ''.join(random.choices(self.chars, k=3))
@@ -114,14 +123,14 @@ class AIbrain_shallowH:
         self.store()
 
     def store(self):
-        # Všechny parametry sítě, co se mají ukládat do .npz
+        # Všechny parametry sítě
         self.parameters = copy.deepcopy({
-            "W1": self.W1,
-            "b1": self.b1,
-            "W2": self.W2,
-            "b2": self.b2,
+            "W1": self.W1, "b1": self.b1,
+            "W2": self.W2, "b2": self.b2,
+            "W3": self.W3, "b3": self.b3,
             "NAME": self.NAME,
-            "N_HIDDEN": N_HIDDEN # Uložení dimenze pro kontrolu
+            "N_HIDDEN_1": N_HIDDEN_1, 
+            "N_HIDDEN_2": N_HIDDEN_2
         })
 
     def set_parameters(self, parameters):
@@ -132,17 +141,14 @@ class AIbrain_shallowH:
 
         self.parameters = params_dict
 
-        # Zde nastavit co chceme ukládat:
+        # Načtení všech parametrů
         self.W1 = np.array(self.parameters["W1"], dtype=float)
         self.b1 = np.array(self.parameters["b1"], dtype=float)
         self.W2 = np.array(self.parameters["W2"], dtype=float)
         self.b2 = np.array(self.parameters["b2"], dtype=float)
+        self.W3 = np.array(self.parameters["W3"], dtype=float)
+        self.b3 = np.array(self.parameters["b3"], dtype=float)
         self.NAME = str(self.parameters["NAME"])
-        
-        # Volitelně kontrola, zda se neměnila topologie sítě
-        # N_HIDDEN_LOADED = int(self.parameters.get("N_HIDDEN", N_HIDDEN))
-        # if N_HIDDEN_LOADED != N_HIDDEN:
-        #    print(f"Varování: Načtená síť má {N_HIDDEN_LOADED} skrytých neuronů, očekáváno {N_HIDDEN}.")
 
 
     def calculate_score(self, distance, time, no):
