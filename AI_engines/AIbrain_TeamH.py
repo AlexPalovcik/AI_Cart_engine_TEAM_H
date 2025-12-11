@@ -44,7 +44,7 @@ class AIbrain_TeamName:
         self.store()
 
     def calculate_score(self, distance, time, no):
-        self.score = distance/time
+        self.score = distance
 
     def passcardata(self, x, y, speed):
         self.x = x
